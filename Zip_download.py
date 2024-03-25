@@ -1,71 +1,154 @@
 import requests
 import os
 import zipfile
-import json
+import datetime
+import shutil
 
-# GitHub API URL for the latest release of cvelistV5
-api_url = 'https://api.github.com/repos/CVEProject/cvelistV5/releases/latest'
+# GitHub API URL for the releases of cvelistV5
+releases_api_url = 'https://api.github.com/repos/CVEProject/cvelistV5/releases'
 
-# Local file to store the tag name of the last downloaded release
-last_downloaded_tag_file = 'last_downloaded_tag.txt'
+# Directory to store extracted CVE data
+extract_dir = 'cve_data/cvelistV5'
 
-def fetch_latest_release_tag():
-    print("Fetching the latest release tag from GitHub...")
-    response = requests.get(api_url)
+
+def get_yesterday_end_of_day_delta_url():
+    # Calculate yesterday's date
+    yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+    yesterday_date = yesterday.strftime('%Y-%m-%d')
+
+    # Construct the target string for "at end of day" delta release
+    target_string = f"{yesterday_date}_at_end_of_day"
+    print(f"Looking for 'at end of day' delta update for: {yesterday_date}")
+
+    response = requests.get(releases_api_url)
     if response.status_code == 200:
-        latest_release_info = response.json()
-        print(f"Latest release tag found: {latest_release_info['tag_name']}")
-        return latest_release_info['tag_name']
+        releases = response.json()
+        for release in releases:
+            # Check if the 'tag_name' matches our target string
+            if target_string in release['tag_name']:
+                print(f"Matching 'at end of day' release found: {release['tag_name']}")
+                # Assume direct download URL follows this pattern
+                direct_download_url = f"https://github.com/CVEProject/cvelistV5/releases/download/{release['tag_name']}/{yesterday_date}_delta_CVEs_at_end_of_day.zip"
+                return direct_download_url
     else:
-        print(f"Failed to fetch latest release info, status code: {response.status_code}")
+        print(f"Failed to fetch releases, status code: {response.status_code}")
         return None
 
-def is_new_release_available(latest_tag):
-    print("Checking if a new release is available...")
-    if not os.path.exists(last_downloaded_tag_file):
-        print("No record of last download found. Proceeding with download.")
-        return True  # No record of last download, so proceed
-    with open(last_downloaded_tag_file, 'r') as file:
-        last_downloaded_tag = file.read().strip()
-        if last_downloaded_tag != latest_tag:
-            print("New release available.")
-            return True
-        else:
-            print("No new release since the last download. No action needed.")
-            return False
 
-def update_last_downloaded_tag(latest_tag):
-    print(f"Updating the last downloaded tag to: {latest_tag}")
-    with open(last_downloaded_tag_file, 'w') as file:
-        file.write(latest_tag)
+def move_delta_files_to_original_structure(delta_dir, target_base_dir):
+    """
+    Move files from the delta directory to their corresponding locations in the
+    original file structure, overwriting existing files if necessary.
+    """
+    for root, dirs, files in os.walk(delta_dir):
+        for file in files:
+            if file.endswith(".json") and file.startswith("CVE-"):
+                # Extract the year and ID for constructing the target path
+                parts = file.split("-")
+                year = parts[1]
+                cve_number = parts[2].split(".")[0]  # Assuming format is CVE-YEAR-NUMBER.json
 
-def main():
-    latest_tag = fetch_latest_release_tag()
-    if latest_tag and is_new_release_available(latest_tag):
-        # Define the URL for the GitHub zip file (update if needed based on release data)
-        zip_url = f'https://github.com/CVEProject/cvelistV5/archive/refs/tags/{latest_tag}.zip'
-        zip_file_path = 'cve_data.zip'
-        extract_dir = 'cve_data'
+                # Determine folder based on the length of the CVE number
+                if len(cve_number) == 5:
+                    target_subdir = os.path.join(target_base_dir, "cves", year, cve_number[:2] + "xxx")
+                elif len(cve_number) == 4:
+                    target_subdir = os.path.join(target_base_dir, "cves", year, cve_number[0] + "xxx")
+                else:
+                    print(f"Unexpected CVE number length in {file}, skipping.")
+                    continue
 
-        print(f"Downloading the latest CVE data from {zip_url}...")
-        response = requests.get(zip_url)
+                if not os.path.exists(target_subdir):
+                    os.makedirs(target_subdir)
+
+                target_file_path = os.path.join(target_subdir, file)
+                shutil.move(os.path.join(root, file), target_file_path)
+                print(f"Moved {file} to {target_file_path}")
+
+
+def download_full_cve_archive():
+    """
+    Downloads the full CVE archive for yesterday at midnight, extracts it,
+    and then extracts the nested 'cves.zip' file if present.
+    """
+    yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+    yesterday_date = yesterday.strftime('%Y-%m-%d')
+    full_archive_url = f"https://github.com/CVEProject/cvelistV5/releases/download/cve_{yesterday_date}_2300Z/{yesterday_date}_all_CVEs_at_midnight.zip.zip"
+
+    zip_file_path = os.path.join(extract_dir, f"{yesterday_date}_all_CVEs_at_midnight.zip.zip")
+
+    print(f"Downloading full CVE archive from {full_archive_url}...")
+    response = requests.get(full_archive_url, stream=True)
+
+    if response.status_code == 200:
+        if not os.path.exists(extract_dir):
+            os.makedirs(extract_dir)
         with open(zip_file_path, 'wb') as file:
-            file.write(response.content)
-        print("Download complete.")
+            for chunk in response.iter_content(chunk_size=128):
+                file.write(chunk)
+        print("Full CVE archive download complete.")
 
-        print("Extracting the ZIP file...")
+        print("Extracting the full CVE archive...")
         with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
             zip_ref.extractall(extract_dir)
         print("Extraction complete.")
 
-        # Placeholder for your data processing logic
-        # print("Processing the data...")
+        # Locate and extract the nested 'cves.zip' if it exists
+        nested_zip_path = os.path.join(extract_dir, 'cves.zip')
+        if os.path.exists(nested_zip_path):
+            print("Extracting the nested 'cves.zip'...")
+            with zipfile.ZipFile(nested_zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            print("'cves.zip' extraction complete.")
 
-        # After successful download and processing, update the last downloaded tag
-        update_last_downloaded_tag(latest_tag)
-        print("Process completed successfully.")
+            # Optional: Cleanup the 'cves.zip' file after extraction
+            os.remove(nested_zip_path)
+            print(f"Removed nested archive '{nested_zip_path}'.")
+
+        # Optional: Cleanup the downloaded ZIP file after all extractions
+        os.remove(zip_file_path)
+        print(f"Removed downloaded archive '{zip_file_path}'.")
     else:
-        print("Exiting. No new data to process.")
+        print(f"Failed to download the full CVE archive, status code: {response.status_code}")
+
+
+def main():
+    zip_url = get_yesterday_end_of_day_delta_url()
+    yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+    yesterday_date = yesterday.strftime('%Y-%m-%d')
+    if zip_url:
+        zip_file_path = os.path.join(extract_dir, f'{yesterday_date}_end_of_day_delta_cve_data.zip')
+
+        print(f"Downloading CVE delta data from {zip_url}...")
+        response = requests.get(zip_url, stream=True)
+        if response.status_code == 200:
+            with open(zip_file_path, 'wb') as file:
+                for chunk in response.iter_content(chunk_size=128):
+                    file.write(chunk)
+            print("Download complete.")
+
+            # Define delta extraction directory
+            delta_extract_dir = os.path.join(extract_dir, "deltaCves")
+            if not os.path.exists(delta_extract_dir):
+                os.makedirs(delta_extract_dir)
+
+            print("Extracting the ZIP file...")
+            with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+                zip_ref.extractall(delta_extract_dir)
+            print("Extraction complete.")
+
+            print("Moving delta files to their respective directories...")
+            move_delta_files_to_original_structure(delta_extract_dir, extract_dir)
+            print("Delta files moved successfully.")
+
+            # Cleanup
+            os.remove(zip_file_path)
+            shutil.rmtree(delta_extract_dir)
+            print(f"Cleanup complete. Removed {zip_file_path} and deltaCves directory.")
+        else:
+            print(f"Failed to download the file, status code: {response.status_code}")
+    else:
+        print("No 'at end of day' delta release found for yesterday.")
+    # download_full_cve_archive() uncomment to download full archive
 
 if __name__ == "__main__":
     main()
