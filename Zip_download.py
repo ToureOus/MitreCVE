@@ -11,7 +11,7 @@ releases_api_url = 'https://api.github.com/repos/CVEProject/cvelistV5/releases'
 extract_dir = 'cve_data/cvelistV5'
 
 
-def get_yesterday_end_of_day_delta_url():
+def yesterday_delta_files():
     # Calculate yesterday's date
     yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
     yesterday_date = yesterday.strftime('%Y-%m-%d')
@@ -28,14 +28,14 @@ def get_yesterday_end_of_day_delta_url():
             if target_string in release['tag_name']:
                 print(f"Matching 'at end of day' release found: {release['tag_name']}")
                 # Assume direct download URL follows this pattern
-                direct_download_url = f"https://github.com/CVEProject/cvelistV5/releases/download/{release['tag_name']}/{yesterday_date}_delta_CVEs_at_end_of_day.zip"
-                return direct_download_url
+                direct_dl = f"https://github.com/CVEProject/cvelistV5/releases/download/{release['tag_name']}/{yesterday_date}_delta_CVEs_at_end_of_day.zip"
+                return direct_dl
     else:
         print(f"Failed to fetch releases, status code: {response.status_code}")
         return None
 
 
-def move_delta_files_to_original_structure(delta_dir, target_base_dir):
+def append_files(delta_dir, target_base_dir):
     """
     Move files from the delta directory to their corresponding locations in the
     original file structure, overwriting existing files if necessary.
@@ -65,7 +65,7 @@ def move_delta_files_to_original_structure(delta_dir, target_base_dir):
                 print(f"Moved {file} to {target_file_path}")
 
 
-def download_full_cve_archive():
+def Download_fullCVE():
     """
     Downloads the full CVE archive for yesterday at midnight, extracts it,
     and then extracts the nested 'cves.zip' file if present.
@@ -112,7 +112,7 @@ def download_full_cve_archive():
 
 
 def main():
-    zip_url = get_yesterday_end_of_day_delta_url()
+    zip_url = yesterday_delta_files()
     yesterday = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
     yesterday_date = yesterday.strftime('%Y-%m-%d')
     if zip_url:
@@ -137,7 +137,7 @@ def main():
             print("Extraction complete.")
 
             print("Moving delta files to their respective directories...")
-            move_delta_files_to_original_structure(delta_extract_dir, extract_dir)
+            append_files(delta_extract_dir, extract_dir)
             print("Delta files moved successfully.")
 
             # Cleanup
@@ -148,7 +148,7 @@ def main():
             print(f"Failed to download the file, status code: {response.status_code}")
     else:
         print("No 'at end of day' delta release found for yesterday.")
-    # download_full_cve_archive() uncomment to download full archive
+    # Download_fullCVE() uncomment to download full archive
 
 if __name__ == "__main__":
     main()
